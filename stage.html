@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Simulación - Stage</title>
+  <style>
+    html, body {
+      margin:0; padding:0; overflow:hidden;
+      background:black;
+      height:100%; width:100%;
+    }
+    canvas {
+      display:block;
+      width:100vw;
+      height:100vh;
+      object-fit:cover;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="cv"></canvas>
+  <script type="module">
+  import { busOn } from './app.js';
+
+  const cv  = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+
+  let escenario = 'bosque';
+  let running   = false;
+  let paused    = false;
+  let velKmh    = 3.0;   // misma unidad que en el panel
+
+  // Tamaño lógico (en "px CSS")
+  let logicalWidth  = window.innerWidth;
+  let logicalHeight = window.innerHeight;
+
+  // 🎥 Video en lugar de imágenes desplazándose
+  const video = document.createElement('video');
+  video.loop        = true;      // 🔁 se reproduce en bucle
+  video.muted       = true;      // no compite con el audio del panel
+  video.autoplay    = false;     // controlamos con start/pause/resume
+  video.playsInline = true;
+
+  function safePlay() {
+    video.play().catch(() => {
+      // Por si el navegador bloquea el autoplay; como viene de interacción,
+      // normalmente no pasa nada.
+    });
+  }
+
+  // 🧮 Mapeo de km/h → playbackRate
+  function computePlaybackRate(kmh) {
+    const base   = 0.3;   // ritmo base (muy lento)
+    const factor = 0.12;  // cuánto suma cada km/h
+
+    // Ejemplos:
+    // 3 km/h  → 0.3 + 3*0.12 = 0.66
+    // 5 km/h  → 0.3 + 5*0.12 = 0.90
+    // 8 km/h  → 0.3 + 8*0.12 = 1.26
+    // 10 km/h → 0.3 +10*0.12 = 1.50
+    let rate = base + kmh * factor;
+
+    // Limites sanos
+    rate = Math.max(0.25, Math.min(2, rate));
+    return rate;
+  }
+
+  function updatePlaybackRate() {
+    video.playbackRate = computePlaybackRate(velKmh);
+  }
+
+  function loadVideoForEscenario() {
+    video.src = `./videos/${escenario}.mp4`;  // bosque.mp4, ciudad.mp4, etc.
+    video.currentTime = 0;
+    video.load();
+    updatePlaybackRate();
+
+    if (running && !paused) {
+      safePlay();
+    }
+  }
+
+  // 📏 Ajuste de tamaño del canvas con alta resolución
+  function resize() {
+    logicalWidth  = window.innerWidth;
+    logicalHeight = window.innerHeight;
+
+    const dpr = window.devicePixelRatio || 1;
+
+    // El canvas interno va en píxeles reales (más grande en pantallas retina)
+    cv.width  = logicalWidth  * dpr;
+    cv.height = logicalHeight * dpr;
+
+    // Escalamos el contexto para seguir dibujando en "px CSS"
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Mejor calidad de reescalado
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Cargar video inicial (bosque)
+  loadVideoForEscenario();
+
+  // 🎥 Dibujar el video como fondo (sin desplazamiento)
+  function drawVideoBackground(dt) {
+    if (video.readyState >= 2) {
+      // Usamos el tamaño lógico, el transform ya se encarga del DPR
+      ctx.drawImage(video, 0, 0, logicalWidth, logicalHeight);
+    }
+  }
+
+  // 🔄 Bucle de animación
+  let last = performance.now();
+  function loop(now) {
+    const dt = (now - last) / 1000;
+    last = now;
+    drawVideoBackground(dt);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // 🔌 Comunicación con el panel
+  busOn(msg => {
+    if (msg.type === 'escenario') {
+      // cambiar de escenario → cargar otro video
+      escenario = msg.value;
+      loadVideoForEscenario();
+
+    } else if (msg.type === 'vel') {
+      // cambio de velocidad desde el panel (slider)
+      velKmh = msg.value;
+      updatePlaybackRate();
+
+    } else if (msg.type === 'start') {
+      // Inicia sesión
+      running = true;
+      paused  = false;
+      velKmh  = msg.vel;
+      updatePlaybackRate();
+      safePlay();
+
+    } else if (msg.type === 'pause') {
+      // Pausa
+      paused = true;
+      video.pause();
+
+    } else if (msg.type === 'resume') {
+      // Reanudar
+      paused = false;
+      if (running) {
+        safePlay();
+      }
+
+    } else if (msg.type === 'stop') {
+      // Detener/Guardar
+      running = false;
+      paused  = false;
+      video.pause();
+      video.currentTime = 0;  // volver al inicio
+    }
+  });
+
+  // Comunicar que el stage está listo
+  window.opener?.postMessage({ type: 'hello-from-stage' }, '*');
+  </script>
+</body>
+</html>
